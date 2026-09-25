@@ -2,7 +2,6 @@ PRD + Phase-Wise Roadmap
 
 # Business Entity Resolution — Amazon ML Challenge 2026
 
-Owner: Madhav · Build target: Antigravity (agentic IDE, local dataset) · Challenge window: 25–27 Sept 2026 IST
 
 ## 1. Problem & objective
 
@@ -78,32 +77,55 @@ Phase 1 — EDA (do this before writing any model code)
 - Ground-truth match-count distribution per S1 (0 / 1 / many), overall singleton rate
 - **Critical check:** does any S2/S3 record match more than one S1 entity? Decides whether the "one-S1-per-record" dedup rule is safe to use in Phase 6
 - Sample and read \~30 true-positive pairs and \~15 near-miss non-matches by hand to catalog real noise patterns (not just the ones listed in the problem statement)
+- **Mine the training corpus for common legal suffixes and address abbreviations** — output a frequency-ranked list (e.g. top-50 name tokens, top-30 address tokens) to drive the normalization rules in Phase 2 rather than relying on a hardcoded list
 
-Exit: a short EDA summary (numbers + 5-10 example pairs) that the blocking and feature design in Phases 2-3 are based on, not assumptions.
+Exit: a short EDA summary written to `experiments/eda_notes.md` (numbers + 5-10 annotated true-positive pairs + the mined suffix/abbreviation frequency tables) that the blocking and feature design in Phases 2-3 are based on, not assumptions.
 
 Phase 2 — Normalization pipeline
 
-- Name: lowercase, unicode/transliteration normalize, legal-suffix stripping into a "core name" field, keep original
-- Address: abbreviation expansion, postal-code + house-number extraction, landmark-phrase isolation
-- Country: normalized string only — no branching logic keyed to specific country values anywhere in the codebase
+- **Keep both raw and normalized fields throughout the pipeline.** Raw strings feed edit-distance metrics (Levenshtein, Jaro-Winkler) where character fidelity matters; normalized strings feed token/TF-IDF metrics. Never discard the original.
+- Name: lowercase → unicode transliteration (unidecode) → expand legal suffixes using the corpus-mined list from Phase 1 (e.g. Corp → Corporation, Pvt → Private, Ltd → Limited, & → and) into a `name_expanded` field, then strip those suffixes to produce a `name_core` field. **Expand first, then strip — stripping without expansion loses information needed for cross-source comparison.**
+- Address: expand abbreviations using the corpus-mined list (Rd → Road, St → Street, Ave → Avenue, Nr → Near, etc.), extract house/street number, extract postal code prefix (first 3-5 digits), isolate landmark phrases (tokens after "Near", "Opp.", "Behind", etc.) into a `landmark` field
+- Country: normalized lowercase string only — no branching logic keyed to specific country values anywhere in the codebase
 - Unit-test normalization on the hand-picked Phase 1 examples before moving on
 
-Exit: normalized fields visibly collapse the Phase 1 noise examples (e.g. "Pvt Ltd" vs "Private Limited" → same core name) without merging the deliberate look-alike negatives.
+Exit: normalized fields visibly collapse the Phase 1 noise examples (e.g. "Pvt Ltd" vs "Private Limited" → same `name_core`) without merging the deliberate look-alike negatives.
 
 Phase 3 — Blocking / candidate generation
 
-- Implement each strategy independently first (name-token, address-token, postal, name TF-IDF kNN, address TF-IDF kNN)
+Implement each strategy independently, measure its recall contribution, then take the union:
+
+1. **Name-token key blocking** — sorted significant name tokens (drop stopwords + legal suffixes) + coarse address signal (city or postal prefix). Exact key match → candidate.
+2. **Sorted Neighborhood Method (SNM)** — sort all records by normalized name, slide a fixed window (tune window size), pair everything within the window. Catches near-misses that exact-key blocking misses due to single-token differences.
+3. **Character n-gram TF-IDF + approximate nearest neighbors (kNN)** — vectorize `name_core` + address as character n-grams (e.g. 2-4 grams), cosine top-k per S1 entity via `sklearn.neighbors.NearestNeighbors` or an ANN library. Best defense against typos and transliteration.
+4. **Word n-gram TF-IDF kNN** — same as above but word-level tokens; captures transpositions and abbreviation differences that character n-grams handle less cleanly.
+5. **Address-token blocking** — separate key on postal code prefix + street number; catches entities with very different names but identical addresses.
+6. **MinHash / LSH fallback** — if dataset size makes TF-IDF kNN too slow (>500k pairs per strategy), replace kNN with MinHash signatures on word shingles for scalable approximate matching. Implement as a drop-in alternative to step 3/4, gated by a size check in `config.py`.
+
 - Measure candidate recall *per strategy*, then for the union — know which strategy is pulling its weight
-- Tune top-k and token-length thresholds against the recall/candidate-set-size tradeoff
+- Tune top-k, window size, and token-length thresholds against the recall/candidate-set-size tradeoff
 - Target ≥97% candidate recall on the training set before proceeding
 
-Exit: documented candidate recall ≥97% (or a deliberate, justified lower number) with candidate set size small enough for fast feature computation.
+Exit: documented candidate recall ≥97% (or a deliberate, justified lower number) with per-strategy recall breakdown logged to `experiments/blocking_eval.md`, and candidate set size small enough for fast feature computation.
 
 Phase 4 — Feature engineering
 
-- Name features: Levenshtein, Jaro-Winkler, token-sort/set ratio, Jaccard (full + core), length diff, first-token match
-- Address features: same similarity family + postal-code match, house-number overlap, token overlap ratio
-- Structural: same-country, plus any Phase-1-discovered signal (e.g. candidate rank/score gap from blocking)
+- **Name features** (computed on both raw and `name_core`/`name_expanded` fields separately — keep as distinct columns):
+  - Levenshtein edit distance (raw)
+  - Jaro-Winkler (raw — good for short strings and prefix differences)
+  - Token sort ratio + token set ratio (normalized — handles word-order transpositions like "Acme Robotics" vs "Robotics Acme")
+  - TF-IDF cosine — **character n-gram version** (catches typos/transliterations) and **word n-gram version** (catches abbreviations) as two separate features
+  - Jaccard on token sets (full name + `name_core`)
+  - First-token exact match, length difference ratio
+- **Address features:** same Levenshtein/Jaro-Winkler/token-set/Jaccard family applied to the full normalized address, plus:
+  - House/street number exact match flag
+  - Postal code prefix match flag
+  - City token overlap
+  - **Landmark flag:** binary — is one (or both) address(es) landmark-based (non-numeric, contains landmark-phrase tokens)? When `True`, name-similarity features become the primary signal and address similarity is down-weighted — let the model learn this, but make the flag explicit so it can.
+- **Structural / meta features:**
+  - Same-country flag (let the model learn its weight — do not hard-filter on it)
+  - **Candidate score gap:** difference between the blocking score (TF-IDF cosine or kNN distance) of the top candidate and the second-best candidate for the same S1 entity. A large gap signals a clear winner; a small gap signals ambiguity — include as a feature so the model can be more conservative in ambiguous cases.
+  - Blocking strategy membership flags (which strategies nominated this pair)
 - Sanity-check feature distributions separately for true matches vs. look-alike negatives
 
 Exit: feature table built for the full candidate set with no nulls/NaNs, and visibly separates known positives from known hard negatives on at least 2-3 features.
@@ -119,8 +141,10 @@ Exit: a saved model + tuned threshold, with val macro F0.5, precision, recall, a
 
 Phase 6 — Entity-level decision logic
 
-- Apply threshold to scored candidates
+- Apply the F0.5-tuned threshold from Phase 5 to scored candidates — keep all candidates above the bar (do **not** force top-1; ground truth allows zero, one, or many matches per S1 entity)
+- **Relative margin check (conservative ambiguity handling):** for each S1 entity, if the highest-scoring candidate is within a small margin (tune this margin on val) of the second-best, treat the top candidate as borderline and apply a stricter sub-threshold before accepting it. Protects precision when the model is uncertain.
 - Enforce (if Phase 1 confirmed it) one-S1-per-record assignment: each S2/S3 id kept only for its highest-scoring S1
+- **Singleton handling:** explicitly track S1 entities that clear no threshold — these predict an empty list, which scores 1.0 if they are true singletons. Do not force a match when nothing is confident enough.
 - Confirm every S1 test entity gets exactly one output row, empty list where nothing clears the bar
 
 Exit: `matching_results.tsv` and `candidate_pairs.tsv` generated on the validation split and pass a local reimplementation of `validate_submission.py`'s rules.
