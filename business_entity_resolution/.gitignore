@@ -1,0 +1,41 @@
+# ── Data (never commit raw TSVs) ──────────────────────────────────────────────
+dataset/
+
+# ── Output artefacts (large generated files) ──────────────────────────────────
+output/*.tsv
+# Keep model.txt and any config / reproducibility artefacts
+!output/model.txt
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Experiment large artefacts ────────────────────────────────────────────────
+experiments/*.pkl
+experiments/*.joblib
+experiments/*.bin
+experiments/*.parquet
+experiments/*.feather
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── OS / editor noise ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/

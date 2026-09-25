@@ -1,0 +1,9 @@
+# ── Core data / ML stack ──────────────────────────────────────────────────────
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+lightgbm==4.5.0
+
+# ── String similarity / normalisation ─────────────────────────────────────────
+rapidfuzz==3.10.1
+unidecode==1.3.8
