@@ -248,8 +248,8 @@ SUBMISSION_CANDIDATE_COLS: tuple[str, ...] = ("source1_entity_id", "candidate_en
 CANDIDATE_SIZE_THRESHOLD: int = 500_000
 
 # Number of nearest-neighbour candidates to retrieve per source1 entity
-# Tune in Phase 3
-TOP_K_CANDIDATES: int = 10
+# Raised from 10 to 20 in Phase A3 to provide headroom above 11-match ground truth ceiling
+TOP_K_CANDIDATES: int = 20
 
 # Sorted-Neighbourhood Method window size
 # Tune in Phase 3

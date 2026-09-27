@@ -1,0 +1,9 @@
+*.zip
+*.parquet
+*.tsv
+dataset/
+__pycache__/
+.venv/
+venv/
+.idea/
+.vscode/

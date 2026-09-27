@@ -1,4 +1,4 @@
-﻿"""
+"""
 eda.py - Ground-truth-focused EDA for the business entity resolution pipeline.
 Person B track (Phase B1).
 
@@ -35,6 +35,19 @@ from config import (
     EXPERIMENTS_DIR,
     GT_COL_MATCHED_ENTITY_IDS,
     GT_COL_SOURCE1_ENTITY_ID,
+    NORM_COL_ADDRESS_EXPANDED,
+    NORM_COL_COUNTRY_NORM,
+    NORM_COL_ENTITY_ID,
+    NORM_COL_HOUSE_NUMBER,
+    NORM_COL_LANDMARK,
+    NORM_COL_NAME_CORE,
+    NORM_COL_NAME_EXPANDED,
+    NORM_COL_POSTAL_PREFIX,
+    NORM_COL_RAW_ADDRESS,
+    NORM_COL_RAW_NAME,
+    RAW_COL_BUSINESS_ADDRESS,
+    RAW_COL_BUSINESS_NAME,
+    RAW_COL_COUNTRY,
     RAW_COL_ENTITY_ID,
     TRAIN_GROUND_TRUTH_PATH,
     TRAIN_SOURCE1_PATH,
@@ -45,7 +58,7 @@ from data_io import load_ground_truth, load_source
 
 
 # ---------------------------------------------------------------------------
-# LEGACY SCAFFOLD STUBS (Person A / Phase 2 - do not remove)
+# SOURCE-SIDE EDA FUNCTIONS (Person A - Phase A1)
 # ---------------------------------------------------------------------------
 
 def field_completeness(df: pd.DataFrame) -> pd.DataFrame:
@@ -53,44 +66,116 @@ def field_completeness(df: pd.DataFrame) -> pd.DataFrame:
     Return a DataFrame reporting, per column: total rows, non-empty count,
     empty count, and % complete.
 
-    Notes
-    -----
-    Implemented in Phase 1.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame (raw or normalized).
+
+    Returns
+    -------
+    pd.DataFrame
+        Summary table indexed by column name with columns:
+        ['total_rows', 'non_empty_count', 'empty_count', 'pct_complete']
     """
-    raise NotImplementedError("field_completeness: implement in Phase 1")
+    rows = []
+    total = len(df)
+    for col in df.columns:
+        # Non-empty defined as not null/NaN and stripped string != ""
+        non_empty = int(df[col].apply(lambda x: pd.notna(x) and str(x).strip() != "").sum())
+        empty = total - non_empty
+        pct = (non_empty / total * 100.0) if total > 0 else 0.0
+        rows.append({
+            "column": col,
+            "total_rows": total,
+            "non_empty_count": non_empty,
+            "empty_count": empty,
+            "pct_complete": round(pct, 4),
+        })
+    res = pd.DataFrame(rows)
+    if "column" in res.columns:
+        res = res.set_index("column")
+    return res
 
 
 def name_length_distribution(df: pd.DataFrame) -> pd.Series:
     """
-    Return a Series of value counts of token count per record in raw_name.
+    Return a Series of value counts of token count per record in raw_name / business_name.
 
-    Notes
-    -----
-    Implemented in Phase 1.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing either RAW_COL_BUSINESS_NAME or NORM_COL_RAW_NAME.
+
+    Returns
+    -------
+    pd.Series
+        Value counts of token counts, sorted by token count ascending.
     """
-    raise NotImplementedError("name_length_distribution: implement in Phase 1")
+    col = RAW_COL_BUSINESS_NAME if RAW_COL_BUSINESS_NAME in df.columns else (
+        NORM_COL_RAW_NAME if NORM_COL_RAW_NAME in df.columns else (
+            NORM_COL_NAME_EXPANDED if NORM_COL_NAME_EXPANDED in df.columns else df.columns[1]
+        )
+    )
+    lengths = df[col].dropna().astype(str).apply(lambda s: len(s.strip().split()) if s.strip() else 0)
+    counts = lengths.value_counts().sort_index()
+    counts.name = "token_count_frequency"
+    return counts
 
 
 def top_name_tokens(df: pd.DataFrame, top_n: int = 50) -> pd.Series:
     """
-    Return the top_n most frequent tokens across all raw_name values.
+    Return the top_n most frequent alphanumeric tokens across all raw_name values.
 
-    Notes
-    -----
-    Implemented in Phase 1.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing business names.
+    top_n : int, default 50
+        Number of top tokens to return.
+
+    Returns
+    -------
+    pd.Series
+        Top tokens indexed by token string, values are frequencies.
     """
-    raise NotImplementedError("top_name_tokens: implement in Phase 1")
+    import re
+    col = RAW_COL_BUSINESS_NAME if RAW_COL_BUSINESS_NAME in df.columns else (
+        NORM_COL_RAW_NAME if NORM_COL_RAW_NAME in df.columns else (
+            NORM_COL_NAME_EXPANDED if NORM_COL_NAME_EXPANDED in df.columns else df.columns[1]
+        )
+    )
+    counter: Counter[str] = Counter()
+    for text in df[col].dropna().astype(str):
+        tokens = re.findall(r"\b[A-Za-z0-9]+\b", text.lower())
+        counter.update(tokens)
+
+    top = counter.most_common(top_n)
+    if not top:
+        return pd.Series(dtype=int, name="token_count")
+    tokens, counts = zip(*top)
+    return pd.Series(data=counts, index=tokens, name="token_count")
 
 
 def country_distribution(df: pd.DataFrame) -> pd.Series:
     """
     Return value counts of the raw country field.
 
-    Notes
-    -----
-    Implemented in Phase 1.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing RAW_COL_COUNTRY or NORM_COL_COUNTRY_NORM.
+
+    Returns
+    -------
+    pd.Series
+        Value counts of country entries.
     """
-    raise NotImplementedError("country_distribution: implement in Phase 1")
+    col = RAW_COL_COUNTRY if RAW_COL_COUNTRY in df.columns else (
+        NORM_COL_COUNTRY_NORM if NORM_COL_COUNTRY_NORM in df.columns else "country"
+    )
+    if col not in df.columns:
+        return pd.Series(dtype=int, name="country_counts")
+    return df[col].fillna("<MISSING>").astype(str).value_counts()
 
 
 def cross_source_token_overlap(
@@ -101,11 +186,55 @@ def cross_source_token_overlap(
     Estimate the fraction of source1 entities that share at least one
     significant name token with at least one candidate entity.
 
-    Notes
-    -----
-    Implemented in Phase 2.
+    Parameters
+    ----------
+    source1_norm : pd.DataFrame
+        Source 1 DataFrame.
+    candidates_norm : pd.DataFrame
+        Candidate DataFrame (Source 2 or Source 3 or combined).
+
+    Returns
+    -------
+    float
+        Fraction [0.0, 1.0] of Source 1 entities sharing >= 1 significant token.
     """
-    raise NotImplementedError("cross_source_token_overlap: implement in Phase 2")
+    import re
+
+    def _get_name_col(df: pd.DataFrame) -> str:
+        for c in [NORM_COL_NAME_CORE, NORM_COL_NAME_EXPANDED, RAW_COL_BUSINESS_NAME, NORM_COL_RAW_NAME]:
+            if c in df.columns:
+                return c
+        return df.columns[1]
+
+    s1_col = _get_name_col(source1_norm)
+    cand_col = _get_name_col(candidates_norm)
+
+    stop_tokens = {
+        "inc", "incorporated", "llc", "ltd", "limited", "pvt", "private",
+        "corp", "corporation", "co", "company", "and", "the", "of", "in",
+        "services", "group", "solutions", "partners", "enterprises", "associates"
+    }
+
+    cand_tokens: set[str] = set()
+    for text in candidates_norm[cand_col].dropna().astype(str):
+        words = re.findall(r"\b[A-Za-z0-9]{3,}\b", text.lower())
+        for w in words:
+            if w not in stop_tokens:
+                cand_tokens.add(w)
+
+    total_s1 = len(source1_norm)
+    if total_s1 == 0:
+        return 0.0
+
+    match_count = 0
+    for text in source1_norm[s1_col].dropna().astype(str):
+        words = re.findall(r"\b[A-Za-z0-9]{3,}\b", text.lower())
+        for w in words:
+            if w not in stop_tokens and w in cand_tokens:
+                match_count += 1
+                break
+
+    return match_count / total_s1
 
 
 def ground_truth_match_ratio(ground_truth: pd.DataFrame) -> pd.Series:
@@ -113,11 +242,21 @@ def ground_truth_match_ratio(ground_truth: pd.DataFrame) -> pd.Series:
     Return a Series of value counts of the number of matched entities per
     source1_entity_id in the ground-truth file.
 
-    Notes
-    -----
-    Implemented in Phase 2.
+    Parameters
+    ----------
+    ground_truth : pd.DataFrame
+        Ground truth DataFrame with GT_COL_MATCHED_ENTITY_IDS.
+
+    Returns
+    -------
+    pd.Series
+        Value counts of match counts per S1 entity, sorted by count ascending.
     """
-    raise NotImplementedError("ground_truth_match_ratio: implement in Phase 2")
+    col = GT_COL_MATCHED_ENTITY_IDS if GT_COL_MATCHED_ENTITY_IDS in ground_truth.columns else ground_truth.columns[1]
+    match_counts = ground_truth[col].astype(str).apply(_parse_matched_ids).apply(len)
+    counts = match_counts.value_counts().sort_index()
+    counts.name = "match_count_distribution"
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +679,141 @@ of MORE THAN ONE S1 entity?
     print(f"  EDA notes written to: {output_path}")
 
 
+def duplicate_counts(df: pd.DataFrame, col: str, case_sensitive: bool = False) -> dict:
+    """
+    Compute duplicate statistics for a given column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    col : str
+        Column to check for duplicates.
+    case_sensitive : bool, default False
+        Whether comparison should be case-sensitive.
+
+    Returns
+    -------
+    dict
+        Dict containing total_rows, unique_count, duplicate_rows, duplicate_pct.
+    """
+    total = len(df)
+    if total == 0 or col not in df.columns:
+        return {"total_rows": total, "unique_count": 0, "duplicate_rows": 0, "duplicate_pct": 0.0}
+
+    series = df[col].dropna().astype(str)
+    if not case_sensitive:
+        series = series.str.strip().str.lower()
+    else:
+        series = series.str.strip()
+
+    unique_cnt = series.nunique()
+    dup_rows = total - unique_cnt
+    dup_pct = (dup_rows / total * 100.0) if total > 0 else 0.0
+    return {
+        "total_rows": total,
+        "unique_count": unique_cnt,
+        "duplicate_rows": dup_rows,
+        "duplicate_pct": round(dup_pct, 4),
+    }
+
+
+def run_source_side_eda(
+    s1_df: pd.DataFrame,
+    s2_df: pd.DataFrame,
+    s3_df: pd.DataFrame,
+) -> dict:
+    """
+    Run source-side exploratory data analysis across Source 1, Source 2, and Source 3.
+
+    Parameters
+    ----------
+    s1_df : pd.DataFrame
+        Source 1 DataFrame.
+    s2_df : pd.DataFrame
+        Source 2 DataFrame.
+    s3_df : pd.DataFrame
+        Source 3 DataFrame.
+
+    Returns
+    -------
+    dict
+        Comprehensive dictionary of source-side statistics.
+    """
+    sources = {"Source 1": s1_df, "Source 2": s2_df, "Source 3": s3_df}
+
+    completeness = {k: field_completeness(v) for k, v in sources.items()}
+    countries = {k: country_distribution(v) for k, v in sources.items()}
+    name_lengths = {k: name_length_distribution(v) for k, v in sources.items()}
+    top_tokens = {k: top_name_tokens(v, top_n=50) for k, v in sources.items()}
+
+    duplicates = {}
+    for name, df in sources.items():
+        name_col = RAW_COL_BUSINESS_NAME if RAW_COL_BUSINESS_NAME in df.columns else df.columns[1]
+        addr_col = RAW_COL_BUSINESS_ADDRESS if RAW_COL_BUSINESS_ADDRESS in df.columns else df.columns[2]
+        duplicates[name] = {
+            "name_exact": duplicate_counts(df, name_col, case_sensitive=True),
+            "name_case_insensitive": duplicate_counts(df, name_col, case_sensitive=False),
+            "addr_exact": duplicate_counts(df, addr_col, case_sensitive=True),
+            "addr_case_insensitive": duplicate_counts(df, addr_col, case_sensitive=False),
+        }
+
+    return {
+        "row_counts": {k: len(v) for k, v in sources.items()},
+        "completeness": completeness,
+        "countries": countries,
+        "name_lengths": name_lengths,
+        "top_tokens": top_tokens,
+        "duplicates": duplicates,
+    }
+
+
+def print_source_eda_results(r: dict) -> None:
+    """Print source-side EDA results to stdout in a clean formatted view."""
+    SEP = "=" * 65
+    sep = "-" * 65
+
+    print(f"\n{SEP}")
+    print("  Source-Side EDA  (Person A - Phase A1)")
+    print(SEP)
+
+    print(f"\n  Dataset Record Counts:")
+    for src, count in r["row_counts"].items():
+        print(f"    {src:<10} : {count:>12,}")
+
+    print(f"\n{sep}")
+    print("  Field Completeness & Missingness")
+    print(sep)
+    for src, comp_df in r["completeness"].items():
+        print(f"\n  [{src}]")
+        print(f"  {'Column':<20} {'Total':>10} {'Non-Empty':>10} {'Missing':>10} {'% Complete':>12}")
+        print(f"  {'-'*66}")
+        for col, row in comp_df.iterrows():
+            print(f"  {str(col):<20} {int(row['total_rows']):>10,} {int(row['non_empty_count']):>10,} {int(row['empty_count']):>10,} {row['pct_complete']:>11.2f}%")
+
+    print(f"\n{sep}")
+    print("  Duplicates Analysis")
+    print(sep)
+    for src, dup in r["duplicates"].items():
+        print(f"\n  [{src}]")
+        print(f"    Name (exact)            : {dup['name_exact']['duplicate_rows']:,} duplicates ({dup['name_exact']['duplicate_pct']:.2f}%)")
+        print(f"    Name (case-insensitive) : {dup['name_case_insensitive']['duplicate_rows']:,} duplicates ({dup['name_case_insensitive']['duplicate_pct']:.2f}%)")
+        print(f"    Address (exact)         : {dup['addr_exact']['duplicate_rows']:,} duplicates ({dup['addr_exact']['duplicate_pct']:.2f}%)")
+        print(f"    Address (case-insens.)  : {dup['addr_case_insensitive']['duplicate_rows']:,} duplicates ({dup['addr_case_insensitive']['duplicate_pct']:.2f}%)")
+
+    print(f"\n{sep}")
+    print("  Country Distribution")
+    print(sep)
+    for src, c_series in r["countries"].items():
+        print(f"\n  [{src}]")
+        total = r["row_counts"][src]
+        for country_val, count in c_series.items():
+            pct = (count / total * 100.0) if total > 0 else 0.0
+            print(f"    {country_val:<15} : {count:>10,}  ({pct:>6.2f}%)")
+
+    print(f"\n{SEP}\n")
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
@@ -571,10 +845,14 @@ if __name__ == "__main__":
     s3_df  = load_source(TRAIN_SOURCE3_PATH)
     gt_df  = load_ground_truth(TRAIN_GROUND_TRUTH_PATH)
 
-    print("Computing EDA statistics...")
-    results = run_ground_truth_eda(gt_df, s1_df, s2_df, s3_df)
+    print("Computing Source-Side EDA statistics (Person A)...")
+    src_results = run_source_side_eda(s1_df, s2_df, s3_df)
+    print_source_eda_results(src_results)
 
-    print_eda_results(results)
+    print("Computing Ground-Truth EDA statistics (Person B)...")
+    gt_results = run_ground_truth_eda(gt_df, s1_df, s2_df, s3_df)
+    print_eda_results(gt_results)
 
-    notes_path = EXPERIMENTS_DIR / "eda_notes_B.md"
-    write_eda_notes(results, notes_path)
+    notes_b_path = EXPERIMENTS_DIR / "eda_notes_B.md"
+    write_eda_notes(gt_results, notes_b_path)
+

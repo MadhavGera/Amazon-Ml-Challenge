@@ -3,8 +3,10 @@ dataset/
 
 # ── Output artefacts (large generated files) ──────────────────────────────────
 output/*.tsv
+output/*.parquet
 # Keep model.txt and any config / reproducibility artefacts
 !output/model.txt
+*.zip
 
 # ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/

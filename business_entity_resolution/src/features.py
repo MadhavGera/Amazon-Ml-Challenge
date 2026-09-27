@@ -517,10 +517,10 @@ def unpack_blocking_flags(pairs: pd.DataFrame) -> pd.DataFrame:
         {
             FEAT_COL_BLOCKED_BY_NAME_TOKEN: [1.0 if "name_token" in s else 0.0 for s in flag_sets],
             FEAT_COL_BLOCKED_BY_SNM: [1.0 if "snm" in s else 0.0 for s in flag_sets],
-            FEAT_COL_BLOCKED_BY_CHAR_TFIDF: [1.0 if "char_tfidf" in s else 0.0 for s in flag_sets],
+            FEAT_COL_BLOCKED_BY_CHAR_TFIDF: [1.0 if ("char_tfidf" in s or "char_ngram" in s) else 0.0 for s in flag_sets],
             FEAT_COL_BLOCKED_BY_WORD_TFIDF: [1.0 if "word_tfidf" in s else 0.0 for s in flag_sets],
             FEAT_COL_BLOCKED_BY_ADDR_TOKEN: [1.0 if "addr_token" in s else 0.0 for s in flag_sets],
-            FEAT_COL_BLOCKED_BY_MINHASH: [1.0 if "minhash" in s else 0.0 for s in flag_sets],
+            FEAT_COL_BLOCKED_BY_MINHASH: [1.0 if ("minhash" in s or "minhash_lsh" in s) else 0.0 for s in flag_sets],
         },
         index=pairs.index,
     )
